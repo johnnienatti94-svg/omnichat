@@ -1,4 +1,7 @@
 import { db, identity, result, logAudit, DEFAULT_ORG_ID } from '@/lib/inbox-server';
+import { isSupabaseConfigured } from '@/lib/supabase/client';
+import { getTeamsAndUsers } from '@/lib/db/supabase-repository';
+import { getSupabaseAdmin } from '@/lib/supabase/server';
 import { z } from 'zod';
 
 const userSchema = z.object({
@@ -20,6 +23,11 @@ export async function GET(req: Request) {
   if (!owner) return result({ error: 'Unauthorized' }, 401);
 
   try {
+    if (isSupabaseConfigured()) {
+      const { users } = await getTeamsAndUsers(DEFAULT_ORG_ID);
+      return result({ users });
+    }
+
     const d = db();
     const rows = await d
       .prepare('SELECT id, org_id, name, email, role, channel_access, working_hours, created_at FROM users WHERE org_id = ? ORDER BY created_at ASC')
@@ -61,11 +69,37 @@ export async function POST(req: Request) {
     }
 
     const { id, name, email, role, channel_access, working_hours } = parsed.data;
-    const d = db();
-    const now = new Date().toISOString();
     const userId = id || `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const now = new Date().toISOString();
     const isNew = !id;
 
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseAdmin();
+      await supabase.from('users').upsert(
+        {
+          id: userId,
+          org_id: DEFAULT_ORG_ID,
+          name,
+          email,
+          role,
+          channel_access,
+          working_hours,
+          created_at: now,
+        },
+        { onConflict: 'id' }
+      );
+
+      await logAudit(DEFAULT_ORG_ID, owner, isNew ? 'created_user' : 'updated_user', 'user', userId, {
+        name,
+        email,
+        role,
+        channel_access,
+      });
+
+      return result({ ok: true, userId });
+    }
+
+    const d = db();
     if (isNew) {
       await d
         .prepare(

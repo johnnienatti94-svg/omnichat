@@ -1,4 +1,5 @@
-import { env } from 'cloudflare:workers';
+import { isSupabaseConfigured } from './supabase/client';
+import * as supabaseRepo from './db/supabase-repository';
 import {
   demoConversations,
   defaultReplies,
@@ -9,18 +10,39 @@ import {
   type ChannelConnection,
 } from './inbox-data';
 
-export function db() {
-  if (!env.DB) throw new Error('Workspace storage unavailable');
-  return env.DB;
-}
+export const DEFAULT_ORG_ID = 'org_meepro';
 
 export function identity(req: Request) {
   return req.headers.get('oai-authenticated-user-id');
 }
 
-export const DEFAULT_ORG_ID = 'org_meepro';
+/**
+ * Accesses Cloudflare D1 if available in runtime context.
+ */
+export function db() {
+  try {
+    const globalContext = globalThis as any;
+    if (globalContext.env?.DB) return globalContext.env.DB;
+    if (globalContext.process?.env?.DB) return globalContext.process.env.DB;
+  } catch {}
+  
+  if (isSupabaseConfigured()) {
+    // When Supabase is configured, legacy direct D1 queries should not be called
+    throw new Error('Using Supabase database. Please use repository methods.');
+  }
 
+  throw new Error('Workspace storage unavailable. Please configure Supabase or Cloudflare D1.');
+}
+
+/**
+ * Initializes workspace seed data for an owner.
+ */
 export async function seed(owner: string) {
+  if (isSupabaseConfigured()) {
+    return await supabaseRepo.seedWorkspace(owner);
+  }
+
+  // Cloudflare D1 Fallback
   const d = db();
   if (await d.prepare('SELECT owner FROM initialized WHERE owner=?').bind(owner).first()) return;
 
@@ -106,14 +128,12 @@ export async function seed(owner: string) {
       )
     );
 
-    // Customer record
     q.push(
       d.prepare(
         'INSERT OR IGNORE INTO customers (id, org_id, name, phone, email, notes, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       ).bind(`cust-${c.id}`, DEFAULT_ORG_ID, c.name, '', '', c.notes, JSON.stringify([c.tag]), now, now)
     );
 
-    // Customer identity record
     q.push(
       d.prepare(
         'INSERT OR IGNORE INTO customer_identities (id, org_id, customer_id, channel, external_id, handle, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -171,6 +191,104 @@ export async function seed(owner: string) {
   await d.batch(q);
 }
 
+/**
+ * Loads all workspace resources for a given owner.
+ */
+export async function getWorkspace(owner: string) {
+  if (isSupabaseConfigured()) {
+    return await supabaseRepo.getWorkspaceData(owner);
+  }
+
+  // Cloudflare D1 Fallback
+  const d = db();
+  const [c, m, r, s, u, t, conn] = await Promise.all([
+    d
+      .prepare(
+        `SELECT id, name, channel, handle, status, assignee, tag, notes,
+                priority, issue_type, resolution, sales_amount, sales_successful,
+                closed_at, closed_by, customer_id, updated_at
+         FROM conversations
+         WHERE owner = ?
+         ORDER BY updated_at DESC`
+      )
+      .bind(owner)
+      .all(),
+    d
+      .prepare(
+        `SELECT id, conversation_id, body, direction, attachments, external_id, delivery_status, created_at
+         FROM messages
+         WHERE owner = ?
+         ORDER BY created_at, id`
+      )
+      .bind(owner)
+      .all(),
+    d.prepare('SELECT id, title, body FROM replies WHERE owner = ? ORDER BY title').bind(owner).all(),
+    d.prepare('SELECT channel, account, url FROM channel_setup WHERE owner = ?').bind(owner).all(),
+    d
+      .prepare('SELECT id, org_id, name, email, role, channel_access, working_hours, created_at FROM users WHERE org_id = ?')
+      .bind(DEFAULT_ORG_ID)
+      .all(),
+    d.prepare('SELECT id, org_id, name, leader_id, created_at FROM teams WHERE org_id = ?').bind(DEFAULT_ORG_ID).all(),
+    d
+      .prepare('SELECT id, org_id, channel, name, account_id, status, created_at FROM channel_connections WHERE org_id = ?')
+      .bind(DEFAULT_ORG_ID)
+      .all(),
+  ]);
+
+  const conversations = c.results.map((conv: any) => ({
+    ...conv,
+    sales_successful: Boolean(conv.sales_successful),
+    messages: m.results
+      .filter((msg: any) => msg.conversation_id === conv.id)
+      .map((msg: any) => {
+        let attachments = [];
+        try {
+          attachments = typeof msg.attachments === 'string' ? JSON.parse(msg.attachments) : msg.attachments || [];
+        } catch {
+          attachments = [];
+        }
+        return {
+          ...msg,
+          attachments,
+        };
+      }),
+  }));
+
+  const users = u.results.map((user: any) => {
+    let channel_access = 'all';
+    let working_hours = { enabled: false, start: '09:00', end: '18:00', days: [1, 2, 3, 4, 5] };
+    try {
+      channel_access = JSON.parse(user.channel_access);
+    } catch {}
+    try {
+      working_hours = JSON.parse(user.working_hours);
+    } catch {}
+    return {
+      ...user,
+      channel_access,
+      working_hours,
+    };
+  });
+
+  const connections = conn.results.map((con: any) => ({
+    ...con,
+    access_token: '',
+    app_secret: '',
+  }));
+
+  return {
+    conversations,
+    replies: r.results,
+    setup: s.results,
+    users,
+    teams: t.results,
+    connections,
+  };
+}
+
+/**
+ * Records an immutable audit event.
+ */
 export async function logAudit(
   orgId: string,
   userId: string,
@@ -179,6 +297,10 @@ export async function logAudit(
   targetId: string,
   details: Record<string, unknown>
 ) {
+  if (isSupabaseConfigured()) {
+    return await supabaseRepo.logAudit(orgId, userId, action, targetType, targetId, details);
+  }
+
   try {
     const d = db();
     const id = `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -189,6 +311,16 @@ export async function logAudit(
   } catch (err) {
     console.error('Failed to write audit log:', err);
   }
+}
+
+/**
+ * Executes an action against the database.
+ */
+export async function executeAction(owner: string, actionData: any) {
+  if (isSupabaseConfigured()) {
+    return await supabaseRepo.executeAction(owner, actionData);
+  }
+  return null;
 }
 
 export function result(body: unknown, status = 200) {

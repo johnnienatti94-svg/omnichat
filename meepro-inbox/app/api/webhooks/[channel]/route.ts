@@ -1,4 +1,6 @@
 import { db, result, logAudit, DEFAULT_ORG_ID } from '@/lib/inbox-server';
+import { isSupabaseConfigured } from '@/lib/supabase/client';
+import { getSupabaseAdmin } from '@/lib/supabase/server';
 import { getChannelAdapter } from '@/lib/channels';
 import { routeInboundConversation } from '@/lib/routing-engine';
 import { processInboundAutomations } from '@/lib/automations-engine';
@@ -16,15 +18,30 @@ export async function GET(req: Request, props: { params: Promise<{ channel: stri
   }
 
   const url = new URL(req.url);
-  const d = db();
 
-  // Look up custom webhook secret from channel_connections if available
-  const conn = await d
-    .prepare('SELECT webhook_secret FROM channel_connections WHERE channel = ? AND org_id = ?')
-    .bind(channel, DEFAULT_ORG_ID)
-    .first();
+  let secret = DEFAULT_WEBHOOK_SECRET;
 
-  const secret = (conn as any)?.webhook_secret || DEFAULT_WEBHOOK_SECRET;
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseAdmin();
+      const { data: conn } = await supabase
+        .from('channel_connections')
+        .select('webhook_secret')
+        .eq('channel', channel)
+        .eq('org_id', DEFAULT_ORG_ID)
+        .maybeSingle();
+      if (conn?.webhook_secret) secret = conn.webhook_secret;
+    } catch {}
+  } else {
+    try {
+      const d = db();
+      const conn = await d
+        .prepare('SELECT webhook_secret FROM channel_connections WHERE channel = ? AND org_id = ?')
+        .bind(channel, DEFAULT_ORG_ID)
+        .first();
+      if ((conn as any)?.webhook_secret) secret = (conn as any).webhook_secret;
+    } catch {}
+  }
 
   const challenge = adapter.verifyWebhookChallenge(url.searchParams, secret);
   if (challenge) {
@@ -47,15 +64,29 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
   }
 
   const rawBody = await req.text();
-  const d = db();
+  let secret = DEFAULT_WEBHOOK_SECRET;
 
-  // 1. Signature Verification
-  const conn = await d
-    .prepare('SELECT webhook_secret FROM channel_connections WHERE channel = ? AND org_id = ?')
-    .bind(channel, DEFAULT_ORG_ID)
-    .first();
-
-  const secret = (conn as any)?.webhook_secret || DEFAULT_WEBHOOK_SECRET;
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseAdmin();
+      const { data: conn } = await supabase
+        .from('channel_connections')
+        .select('webhook_secret')
+        .eq('channel', channel)
+        .eq('org_id', DEFAULT_ORG_ID)
+        .maybeSingle();
+      if (conn?.webhook_secret) secret = conn.webhook_secret;
+    } catch {}
+  } else {
+    try {
+      const d = db();
+      const conn = await d
+        .prepare('SELECT webhook_secret FROM channel_connections WHERE channel = ? AND org_id = ?')
+        .bind(channel, DEFAULT_ORG_ID)
+        .first();
+      if ((conn as any)?.webhook_secret) secret = (conn as any).webhook_secret;
+    } catch {}
+  }
 
   const sigHeader =
     req.headers.get('x-hub-signature-256') ||
@@ -82,21 +113,194 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
     const now = new Date().toISOString();
     const owner = 'owner-org-meepro';
 
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseAdmin();
+
+      for (const msg of normalizedMessages) {
+        // Idempotency check in Supabase
+        if (msg.externalId) {
+          const { data: existing } = await supabase
+            .from('messages')
+            .select('id')
+            .eq('external_id', msg.externalId)
+            .maybeSingle();
+          if (existing) continue;
+        }
+
+        // Customer Identity Resolution
+        let customerId = '';
+        const { data: identityRow } = await supabase
+          .from('customer_identities')
+          .select('customer_id')
+          .eq('org_id', DEFAULT_ORG_ID)
+          .eq('channel', msg.channel)
+          .eq('external_id', msg.sender.id)
+          .maybeSingle();
+
+        if (identityRow?.customer_id) {
+          customerId = identityRow.customer_id;
+        } else {
+          customerId = `cust-${msg.channel}-${msg.sender.id.slice(-6)}-${Date.now().toString(36)}`;
+          const customerName = msg.sender.name || `${msg.channel.toUpperCase()} User`;
+
+          await supabase.from('customers').upsert(
+            {
+              id: customerId,
+              org_id: DEFAULT_ORG_ID,
+              name: customerName,
+              created_at: now,
+              updated_at: now,
+            },
+            { onConflict: 'id' }
+          );
+
+          await supabase.from('customer_identities').upsert(
+            {
+              id: `ident-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              org_id: DEFAULT_ORG_ID,
+              customer_id: customerId,
+              channel: msg.channel,
+              external_id: msg.sender.id,
+              handle: msg.sender.handle || '',
+              created_at: now,
+            },
+            { onConflict: 'channel, external_id' }
+          );
+        }
+
+        // Conversation Lookup or Creation
+        let conversationId = '';
+        let isNewConv = false;
+        let convAssignee = '';
+
+        const { data: convRow } = await supabase
+          .from('conversations')
+          .select('id, status, assignee, tag')
+          .eq('customer_id', customerId)
+          .eq('channel', msg.channel)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (convRow?.id) {
+          conversationId = convRow.id;
+          convAssignee = convRow.assignee || '';
+        } else {
+          isNewConv = true;
+          conversationId = `conv-${msg.channel}-${Date.now().toString(36)}`;
+          const customerName = msg.sender.name || `${msg.channel.toUpperCase()} Customer`;
+
+          let d: any = null;
+          try {
+            d = db();
+          } catch {}
+
+          const routing = await routeInboundConversation({
+            orgId: DEFAULT_ORG_ID,
+            channel: msg.channel,
+            customerId,
+            d1: d,
+          });
+
+          convAssignee = routing.assignee || '';
+
+          await supabase.from('conversations').insert({
+            owner,
+            id: conversationId,
+            name: customerName,
+            channel: msg.channel,
+            handle: msg.sender.handle || msg.sender.id,
+            status: 'open',
+            assignee: convAssignee,
+            tag: '',
+            notes: '',
+            priority: 'normal',
+            issue_type: '',
+            resolution: '',
+            sales_amount: 0,
+            sales_successful: false,
+            customer_id: customerId,
+            updated_at: now,
+          });
+
+          if (convAssignee) {
+            await logAudit(DEFAULT_ORG_ID, owner, 'conversation_auto_routed', 'conversation', conversationId, {
+              assignee: convAssignee,
+              reason: routing.reason,
+              channel: msg.channel,
+            });
+          }
+        }
+
+        // Ingest Message into Supabase
+        const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        await supabase.from('messages').insert({
+          id: messageId,
+          owner,
+          conversation_id: conversationId,
+          body: msg.body,
+          direction: 'in',
+          attachments: msg.attachments || [],
+          external_id: msg.externalId || '',
+          delivery_status: 'delivered',
+          created_at: now,
+        });
+
+        await supabase
+          .from('conversations')
+          .update({ updated_at: now, status: 'open' })
+          .eq('owner', owner)
+          .eq('id', conversationId);
+
+        // Trigger Automations
+        let d: any = null;
+        try {
+          d = db();
+        } catch {}
+
+        const autoResult = await processInboundAutomations({
+          orgId: DEFAULT_ORG_ID,
+          owner,
+          conversationId,
+          messageBody: msg.body,
+          customerName: msg.sender.name || 'ลูกค้า',
+          channel: msg.channel,
+          isFirstMessage: isNewConv,
+          d1: d,
+        });
+
+        if (autoResult.matchedRule || autoResult.automatedReplies.length > 0) {
+          await logAudit(DEFAULT_ORG_ID, owner, 'automations_triggered', 'conversation', conversationId, {
+            matched_rule: autoResult.matchedRule?.name,
+            applied_tag: autoResult.appliedTag,
+            applied_priority: autoResult.appliedPriority,
+            replies_count: autoResult.automatedReplies.length,
+            channel: msg.channel,
+          });
+        }
+
+        processedIds.push(messageId);
+      }
+
+      return result({
+        ok: true,
+        processed: processedIds.length,
+        message_ids: processedIds,
+      });
+    }
+
+    // D1 Fallback Branch
+    const d = db();
     for (const msg of normalizedMessages) {
-      // 2. Idempotency & Deduplication
       if (msg.externalId) {
         const existing = await d
           .prepare('SELECT id FROM messages WHERE external_id = ? LIMIT 1')
           .bind(msg.externalId)
           .first();
 
-        if (existing) {
-          // Already ingested, skip duplicate delivery
-          continue;
-        }
+        if (existing) continue;
       }
 
-      // 3. Customer Identity Resolution
       let customerId = '';
       const identityRow = await d
         .prepare(
@@ -108,7 +312,6 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
       if (identityRow && (identityRow as any).customer_id) {
         customerId = (identityRow as any).customer_id;
       } else {
-        // Create new Customer & Identity
         customerId = `cust-${msg.channel}-${msg.sender.id.slice(-6)}-${Date.now().toString(36)}`;
         const customerName = msg.sender.name || `${msg.channel.toUpperCase()} User`;
 
@@ -134,7 +337,6 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
         ]);
       }
 
-      // 4. Conversation Lookup or Creation
       let conversationId = '';
       const convRow = await d
         .prepare(
@@ -156,7 +358,6 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
         conversationId = `conv-${msg.channel}-${Date.now().toString(36)}`;
         const customerName = msg.sender.name || `${msg.channel.toUpperCase()} Customer`;
 
-        // 5. Intelligent Routing for New Conversation
         const routing = await routeInboundConversation({
           orgId: DEFAULT_ORG_ID,
           channel: msg.channel,
@@ -195,7 +396,6 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
         }
       }
 
-      // 6. Ingest Inbound Message
       const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       await d
         .prepare(
@@ -206,13 +406,11 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
         .bind(owner, messageId, conversationId, msg.body, JSON.stringify(msg.attachments || []), msg.externalId, now)
         .run();
 
-      // Update conversation timestamp
       await d
         .prepare('UPDATE conversations SET updated_at = ?, status = ? WHERE owner = ? AND id = ?')
         .bind(now, 'open', owner, conversationId)
         .run();
 
-      // 7. Trigger Automations Engine (Keywords, welcome greeting, off-hours responder)
       const autoResult = await processInboundAutomations({
         orgId: DEFAULT_ORG_ID,
         owner,

@@ -1,4 +1,6 @@
 import { db, identity, result, logAudit, DEFAULT_ORG_ID } from '@/lib/inbox-server';
+import { isSupabaseConfigured } from '@/lib/supabase/client';
+import { getSupabaseAdmin } from '@/lib/supabase/server';
 import { routeInboundConversation } from '@/lib/routing-engine';
 import { processInboundAutomations } from '@/lib/automations-engine';
 import { defaultKeywordRules, type Channel, type AutomationsConfig } from '@/lib/inbox-data';
@@ -45,6 +47,36 @@ export async function GET(req: Request) {
   if (!owner) return result({ error: 'Sign in to access settings.' }, 401);
 
   try {
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseAdmin();
+      const { data: row } = await supabase
+        .from('automations')
+        .select('*')
+        .eq('id', `config-${DEFAULT_ORG_ID}`)
+        .maybeSingle();
+
+      if (!row || !row.action) {
+        const defaultConfig: AutomationsConfig = {
+          org_id: DEFAULT_ORG_ID,
+          welcome_greeting_enabled: true,
+          welcome_greeting_text: 'สวัสดีครับ ยินดีต้อนรับสู่ MeePro Mobile & Accessories มีอะไรให้แอดมินช่วยดูแลแจ้งได้เลยครับ 😊',
+          off_hours_enabled: true,
+          off_hours_text: 'ขณะนี้อยู่นอกเวลาทำการ (เวลาทำการ 09:00 - 18:00 น.) แอดมินได้รับข้อความแล้วและจะรีบติดต่อกลับในเวลาทำการครับ 🙏',
+          off_hours_schedule: { start: '09:00', end: '18:00', days: [1, 2, 3, 4, 5, 6] },
+          closing_message_enabled: false,
+          closing_message_text: 'ขอบคุณที่ติดต่อ MeePro ครับ หากมีข้อสงสัยเพิ่มเติมสามารถทักแชทได้ตลอดเวลาครับ ✨',
+          routing_mode: 'round_robin',
+          previous_agent_affinity: true,
+          keyword_rules: defaultKeywordRules,
+          updated_at: new Date().toISOString(),
+        };
+        return result({ config: defaultConfig });
+      }
+
+      const action = typeof row.action === 'string' ? JSON.parse(row.action) : row.action;
+      return result({ config: { org_id: DEFAULT_ORG_ID, ...action, updated_at: row.updated_at } });
+    }
+
     const d = db();
     const row = await d.prepare('SELECT * FROM automations WHERE org_id = ?').bind(DEFAULT_ORG_ID).first();
 
@@ -98,9 +130,35 @@ export async function PUT(req: Request) {
     }
 
     const data = parsed.data;
-    const d = db();
     const now = new Date().toISOString();
 
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseAdmin();
+      await supabase.from('automations').upsert(
+        {
+          id: `config-${DEFAULT_ORG_ID}`,
+          org_id: DEFAULT_ORG_ID,
+          name: 'Master Automations Config',
+          trigger_type: 'system_config',
+          condition: {},
+          action: data,
+          is_active: true,
+          updated_at: now,
+        },
+        { onConflict: 'id' }
+      );
+
+      await logAudit(DEFAULT_ORG_ID, owner, 'updated_automations_config', 'automations', DEFAULT_ORG_ID, {
+        routing_mode: data.routing_mode,
+        keyword_rules_count: data.keyword_rules.length,
+        welcome_greeting: data.welcome_greeting_enabled,
+        off_hours: data.off_hours_enabled,
+      });
+
+      return result({ ok: true, updated_at: now });
+    }
+
+    const d = db();
     await d
       .prepare(
         `INSERT INTO automations (
@@ -163,7 +221,10 @@ export async function POST(req: Request) {
 
     const { message, channel, test_time, customer_id, is_first_message } = parsed.data;
     const testDate = test_time ? new Date(test_time) : new Date();
-    const d = db();
+    let d: any = null;
+    try {
+      d = db();
+    } catch {}
 
     // 1. Dry-run Routing Engine
     const routingResult = await routeInboundConversation({
@@ -174,7 +235,7 @@ export async function POST(req: Request) {
       now: testDate,
     });
 
-    // 2. Dry-run Automations Engine (without writing to D1 database)
+    // 2. Dry-run Automations Engine
     const automationResult = await processInboundAutomations({
       orgId: DEFAULT_ORG_ID,
       owner,

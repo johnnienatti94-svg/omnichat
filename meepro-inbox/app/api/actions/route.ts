@@ -1,4 +1,5 @@
-import { db, identity, result, logAudit, DEFAULT_ORG_ID } from '@/lib/inbox-server';
+import { db, identity, result, logAudit, executeAction, DEFAULT_ORG_ID } from '@/lib/inbox-server';
+import { isSupabaseConfigured } from '@/lib/supabase/client';
 import { isWithinReopenWindow } from '@/lib/ticket-lifecycle';
 import { routeInboundConversation } from '@/lib/routing-engine';
 import { processInboundAutomations } from '@/lib/automations-engine';
@@ -81,6 +82,12 @@ export async function POST(req: Request) {
     }
 
     const p = parsed.data;
+
+    if (isSupabaseConfigured()) {
+      const actionRes = await executeAction(owner, p);
+      return result(actionRes || { success: true });
+    }
+
     const d = db();
 
     if (p.action === 'reply' || p.action === 'update' || p.action === 'resolveWithSales') {

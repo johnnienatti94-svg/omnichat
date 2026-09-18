@@ -1,4 +1,7 @@
 import { db, identity, result, logAudit, DEFAULT_ORG_ID } from '@/lib/inbox-server';
+import { isSupabaseConfigured } from '@/lib/supabase/client';
+import { getTeamsAndUsers, getAuditLogs } from '@/lib/db/supabase-repository';
+import { getSupabaseAdmin } from '@/lib/supabase/server';
 import { z } from 'zod';
 
 const teamSchema = z.object({
@@ -12,6 +15,12 @@ export async function GET(req: Request) {
   if (!owner) return result({ error: 'Unauthorized' }, 401);
 
   try {
+    if (isSupabaseConfigured()) {
+      const { teams } = await getTeamsAndUsers(DEFAULT_ORG_ID);
+      const logs = await getAuditLogs(DEFAULT_ORG_ID, 50);
+      return result({ teams, logs });
+    }
+
     const d = db();
     const [teamsRes, logsRes] = await Promise.all([
       d.prepare('SELECT id, org_id, name, leader_id, created_at FROM teams WHERE org_id = ? ORDER BY created_at ASC').bind(DEFAULT_ORG_ID).all(),
@@ -40,11 +49,21 @@ export async function POST(req: Request) {
     }
 
     const { id, name, leader_id } = parsed.data;
-    const d = db();
-    const now = new Date().toISOString();
     const teamId = id || `team-${Date.now().toString(36)}`;
+    const now = new Date().toISOString();
     const isNew = !id;
 
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseAdmin();
+      await supabase.from('teams').upsert(
+        { id: teamId, org_id: DEFAULT_ORG_ID, name, leader_id: leader_id || null, created_at: now },
+        { onConflict: 'id' }
+      );
+      await logAudit(DEFAULT_ORG_ID, owner, isNew ? 'created_team' : 'updated_team', 'team', teamId, { name, leader_id });
+      return result({ ok: true, teamId });
+    }
+
+    const d = db();
     if (isNew) {
       await d
         .prepare('INSERT INTO teams (id, org_id, name, leader_id, created_at) VALUES (?, ?, ?, ?, ?)')
