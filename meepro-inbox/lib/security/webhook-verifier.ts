@@ -77,3 +77,51 @@ export async function verifyTikTokShopSignature(
 
   return timingSafeEqual(cleanHeader, computedHash);
 }
+
+/**
+ * Computes HMAC-SHA256 and returns Base64 string.
+ */
+export async function computeHmacSha256Base64(secret: string, message: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const keyData = encoder.encode(secret);
+  const messageData = encoder.encode(message);
+
+  const key = await crypto.subtle.importKey(
+    'raw',
+    keyData,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+
+  const signatureBuffer = await crypto.subtle.sign('HMAC', key, messageData);
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(signatureBuffer).toString('base64');
+  }
+  const bytes = new Uint8Array(signatureBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Verifies LINE Official Account Webhook signature (x-line-signature).
+ * LINE uses HMAC-SHA256 algorithm with Channel Secret, output as a Base64-encoded string.
+ */
+export async function verifyLineSignature(
+  rawBody: string,
+  signatureHeader: string | null,
+  channelSecret: string
+): Promise<boolean> {
+  if (!signatureHeader || !channelSecret) {
+    return false;
+  }
+
+  const expectedSignature = signatureHeader.trim();
+  const computedSignature = await computeHmacSha256Base64(channelSecret, rawBody);
+
+  return timingSafeEqual(expectedSignature, computedSignature);
+}
+

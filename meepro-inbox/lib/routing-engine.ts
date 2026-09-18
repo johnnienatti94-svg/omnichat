@@ -1,4 +1,4 @@
-import type { Channel, StaffUser, WorkingHours, AutomationsConfig } from './inbox-data';
+import { type Channel, type StaffUser, type WorkingHours, type AutomationsConfig, defaultStaff } from './inbox-data';
 
 export function parseTimeToMinutes(timeStr: string): number {
   const [hours, minutes] = timeStr.split(':').map((s) => parseInt(s, 10));
@@ -93,11 +93,15 @@ export async function routeInboundConversation(params: {
   // 1. Fetch organization automations configuration
   let config: any = params.overrideConfig;
   if (!config) {
-    const row = await d1
-      .prepare('SELECT routing_mode, previous_agent_affinity FROM automations WHERE org_id = ?')
-      .bind(orgId)
-      .first();
-    config = row || { routing_mode: 'round_robin', previous_agent_affinity: 1 };
+    if (d1) {
+      const row = await d1
+        .prepare('SELECT routing_mode, previous_agent_affinity FROM automations WHERE org_id = ?')
+        .bind(orgId)
+        .first();
+      config = row || { routing_mode: 'round_robin', previous_agent_affinity: 1 };
+    } else {
+      config = { routing_mode: 'round_robin', previous_agent_affinity: 1 };
+    }
   }
 
   if (config.routing_mode === 'manual') {
@@ -105,18 +109,23 @@ export async function routeInboundConversation(params: {
   }
 
   // 2. Fetch all staff users for the organization
-  const staffRows = await d1
-    .prepare('SELECT id, name, role, channel_access, working_hours FROM users WHERE org_id = ?')
-    .bind(orgId)
-    .all();
+  let allStaff: StaffUser[] = [];
+  if (d1) {
+    const staffRows = await d1
+      .prepare('SELECT id, name, role, channel_access, working_hours FROM users WHERE org_id = ?')
+      .bind(orgId)
+      .all();
 
-  const allStaff = (staffRows.results || []).map((u: any) => ({
-    id: u.id,
-    name: u.name,
-    role: u.role,
-    channel_access: typeof u.channel_access === 'string' ? JSON.parse(u.channel_access) : u.channel_access,
-    working_hours: typeof u.working_hours === 'string' ? JSON.parse(u.working_hours) : u.working_hours,
-  }));
+    allStaff = (staffRows.results || []).map((u: any) => ({
+      id: u.id,
+      name: u.name,
+      role: u.role,
+      channel_access: typeof u.channel_access === 'string' ? JSON.parse(u.channel_access) : u.channel_access,
+      working_hours: typeof u.working_hours === 'string' ? JSON.parse(u.working_hours) : u.working_hours,
+    }));
+  } else {
+    allStaff = defaultStaff as any;
+  }
 
   // 3. Filter staff by channel access
   const channelStaff = allStaff.filter((s: any) => canStaffHandleChannel(s, channel));
@@ -129,7 +138,7 @@ export async function routeInboundConversation(params: {
   const onDutyStaff = channelStaff.filter((s: any) => isStaffOnDuty(s.working_hours, now));
 
   // 5. Test previous-agent affinity if customerId is provided
-  if (config.previous_agent_affinity && customerId) {
+  if (config.previous_agent_affinity && customerId && d1) {
     const previousConv = await d1
       .prepare(
         `SELECT assignee FROM conversations 
@@ -162,36 +171,49 @@ export async function routeInboundConversation(params: {
   }
 
   // 7. Balanced Round-Robin: Pick the on-duty agent with the lowest open ticket count
-  const openCountRows = await d1
-    .prepare(
-      `SELECT assignee, COUNT(*) as open_count 
-       FROM conversations 
-       WHERE status = 'open' AND assignee != ''
-       GROUP BY assignee`
-    )
-    .all();
+  if (d1) {
+    const openCountRows = await d1
+      .prepare(
+        `SELECT assignee, COUNT(*) as open_count 
+         FROM conversations 
+         WHERE status = 'open' AND assignee != ''
+         GROUP BY assignee`
+      )
+      .all();
 
-  const countMap = new Map<string, number>();
-  for (const row of openCountRows.results || []) {
-    countMap.set(row.assignee, Number(row.open_count));
+    const countMap = new Map<string, number>();
+    for (const row of openCountRows.results || []) {
+      countMap.set(row.assignee, Number(row.open_count));
+    }
+
+    // Sort on-duty staff by open conversation workload (ascending)
+    const sortedStaff = [...onDutyStaff].sort((a, b) => {
+      const countA = countMap.get(a.id) ?? 0;
+      const countB = countMap.get(b.id) ?? 0;
+      return countA - countB;
+    });
+
+    const chosenAgent = sortedStaff[0];
+
+    return {
+      assignee: chosenAgent.id,
+      assigneeName: chosenAgent.name,
+      reason: 'round_robin',
+      details: {
+        candidates: onDutyStaff.map((s: any) => s.id),
+        selectedWorkload: countMap.get(chosenAgent.id) ?? 0,
+      },
+    };
   }
 
-  // Sort on-duty staff by open conversation workload (ascending)
-  const sortedStaff = [...onDutyStaff].sort((a, b) => {
-    const countA = countMap.get(a.id) ?? 0;
-    const countB = countMap.get(b.id) ?? 0;
-    return countA - countB;
-  });
-
-  const chosenAgent = sortedStaff[0];
-
+  const chosenAgent = onDutyStaff[0];
   return {
     assignee: chosenAgent.id,
     assigneeName: chosenAgent.name,
     reason: 'round_robin',
     details: {
       candidates: onDutyStaff.map((s: any) => s.id),
-      selectedWorkload: countMap.get(chosenAgent.id) ?? 0,
+      selectedWorkload: 0,
     },
   };
 }

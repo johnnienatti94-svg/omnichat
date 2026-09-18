@@ -231,7 +231,7 @@ export default function TeamManagement({
                 {filteredUsers.map((u) => {
                   const role = roleLabels[u.role] || { en: u.role, th: u.role };
                   const isAllChannels = u.channel_access === 'all' || !Array.isArray(u.channel_access);
-                  const channelsList: Channel[] = isAllChannels ? ['facebook', 'instagram', 'tiktok'] : (u.channel_access as Channel[]);
+                  const channelsList: Channel[] = isAllChannels ? ['facebook', 'instagram', 'tiktok', 'line'] : (u.channel_access as Channel[]);
                   const wh = u.working_hours;
 
                   return (
@@ -276,7 +276,9 @@ export default function TeamManagement({
                                     ? 'bg-blue-50 text-blue-700 border border-blue-200'
                                     : ch === 'instagram'
                                     ? 'bg-pink-50 text-pink-700 border border-pink-200'
-                                    : 'bg-slate-100 text-slate-800 border border-slate-200'
+                                    : ch === 'tiktok'
+                                    ? 'bg-slate-100 text-slate-800 border border-slate-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                 }`}
                               >
                                 {channelNames[ch as Channel] || ch}
@@ -433,7 +435,7 @@ export default function TeamManagement({
 
                 {formData.channel_access !== 'all' && (
                   <div className="pl-6 pt-2 space-y-1.5 border-t border-slate-200/60 mt-2">
-                    {(['facebook', 'instagram', 'tiktok'] as Channel[]).map((ch) => {
+                    {(['facebook', 'instagram', 'tiktok', 'line'] as Channel[]).map((ch) => {
                       const selected =
                         Array.isArray(formData.channel_access) && formData.channel_access.includes(ch);
                       return (

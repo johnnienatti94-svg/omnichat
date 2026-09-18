@@ -7,6 +7,7 @@ import { processInboundAutomations } from '@/lib/automations-engine';
 import type { Channel } from '@/lib/inbox-data';
 
 const DEFAULT_WEBHOOK_SECRET = 'meepro_webhook_secret_2026';
+const processedExternalIds = new Set<string>();
 
 export async function GET(req: Request, props: { params: Promise<{ channel: string }> }) {
   const params = await props.params;
@@ -91,6 +92,7 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
   const sigHeader =
     req.headers.get('x-hub-signature-256') ||
     req.headers.get('x-tts-signature') ||
+    req.headers.get('x-line-signature') ||
     req.headers.get('authorization');
 
   // Verify signature if header is provided
@@ -117,14 +119,19 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
       const supabase = getSupabaseAdmin();
 
       for (const msg of normalizedMessages) {
-        // Idempotency check in Supabase
+        // Idempotency check
         if (msg.externalId) {
+          if (processedExternalIds.has(msg.externalId)) continue;
+
           const { data: existing } = await supabase
             .from('messages')
             .select('id')
             .eq('external_id', msg.externalId)
             .maybeSingle();
-          if (existing) continue;
+          if (existing) {
+            processedExternalIds.add(msg.externalId);
+            continue;
+          }
         }
 
         // Customer Identity Resolution
@@ -279,6 +286,7 @@ export async function POST(req: Request, props: { params: Promise<{ channel: str
           });
         }
 
+        if (msg.externalId) processedExternalIds.add(msg.externalId);
         processedIds.push(messageId);
       }
 

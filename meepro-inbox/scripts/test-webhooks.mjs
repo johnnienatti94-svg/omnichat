@@ -15,6 +15,12 @@ function signTikTok(body, secret = SECRET) {
   return hmac.digest('hex');
 }
 
+function signLine(body, secret = SECRET) {
+  const hmac = crypto.createHmac('sha256', secret);
+  hmac.update(body);
+  return hmac.digest('base64');
+}
+
 async function runTests() {
   console.log('====================================================');
   console.log('  MEEPRO WEBHOOK GATEWAY & CHANNEL ADAPTER TESTS   ');
@@ -62,6 +68,12 @@ async function runTests() {
     );
     const text = await res.text();
     assert(res.status === 200 && text === challengeVal, 'TikTok Shop GET Challenge Verification', `status: ${res.status}`);
+  }
+
+  {
+    const res = await fetch(`${BASE_URL}/api/webhooks/line`);
+    const text = await res.text();
+    assert(res.status === 200 && text === 'OK', 'LINE OA GET Challenge Verification', `status: ${res.status}`);
   }
 
   {
@@ -119,6 +131,35 @@ async function runTests() {
       body: dummyPayload,
     });
     assert(res.status === 401, 'Reject Tampered Meta HMAC Signature', `status: ${res.status}`);
+  }
+
+  // LINE Valid Base64 Signature
+  {
+    const lineDummy = JSON.stringify({ events: [] });
+    const res = await fetch(`${BASE_URL}/api/webhooks/line`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-line-signature': signLine(lineDummy),
+      },
+      body: lineDummy,
+    });
+    const json = await res.json();
+    assert(res.status === 200 && json.ok, 'Accept Valid LINE Base64 HMAC Signature', `status: ${res.status}`);
+  }
+
+  // LINE Tampered Signature
+  {
+    const lineDummy = JSON.stringify({ events: [] });
+    const res = await fetch(`${BASE_URL}/api/webhooks/line`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-line-signature': 'invalid_base64_signature_here==',
+      },
+      body: lineDummy,
+    });
+    assert(res.status === 401, 'Reject Tampered LINE HMAC Signature', `status: ${res.status}`);
   }
 
   // ----------------------------------------------------
@@ -220,6 +261,43 @@ async function runTests() {
     });
     const json = await res.json();
     assert(res.status === 200 && json.processed === 1, 'TikTok Shop Customer Chat Webhook Ingestion', `processed: ${json.processed}`);
+  }
+
+  // LINE Official Account Inbound
+  const lineExternalMid = `line.phaseL.${Date.now()}`;
+  const linePayload = JSON.stringify({
+    destination: 'U1234567890abcdef',
+    events: [
+      {
+        type: 'message',
+        message: {
+          type: 'text',
+          id: lineExternalMid,
+          text: 'สวัสดีครับ สอบถามข้อมูลโปรโมชั่นผ่อนผ่าน LINE Official หน่อยครับ',
+        },
+        timestamp: Date.now(),
+        source: {
+          type: 'user',
+          userId: 'U9876543210lineuser',
+        },
+        replyToken: 'token_reply_123',
+        mode: 'active',
+        webhookEventId: `evt_${Date.now()}`,
+      },
+    ],
+  });
+
+  {
+    const res = await fetch(`${BASE_URL}/api/webhooks/line`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-line-signature': signLine(linePayload),
+      },
+      body: linePayload,
+    });
+    const json = await res.json();
+    assert(res.status === 200 && json.processed === 1, 'LINE Official Account Webhook Ingestion', `processed: ${json.processed}`);
   }
 
   // ----------------------------------------------------

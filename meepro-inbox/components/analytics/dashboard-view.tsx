@@ -61,7 +61,7 @@ export default function DashboardView({
 
   // Channel breakdown
   const channelStats = useMemo(() => {
-    const channels: Channel[] = ['facebook', 'instagram', 'tiktok'];
+    const channels: Channel[] = ['facebook', 'instagram', 'tiktok', 'line'];
     const total = filteredConversations.length || 1;
 
     return channels.map((ch) => {
@@ -276,6 +276,8 @@ export default function DashboardView({
                           ? 'bg-blue-600'
                           : item.channel === 'instagram'
                           ? 'bg-rose-500'
+                          : item.channel === 'tiktok'
+                          ? 'bg-slate-800'
                           : 'bg-emerald-500'
                       }`}
                     />
@@ -296,6 +298,8 @@ export default function DashboardView({
                         ? 'bg-blue-600'
                         : item.channel === 'instagram'
                         ? 'bg-rose-500'
+                        : item.channel === 'tiktok'
+                        ? 'bg-slate-800'
                         : 'bg-emerald-500'
                     }`}
                     style={{ width: `${item.share}%` }}

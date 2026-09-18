@@ -43,7 +43,7 @@ export const teamMembers = sqliteTable('team_members', {
 export const channelConnections = sqliteTable('channel_connections', {
   id: text('id').primaryKey(),
   org_id: text('org_id').notNull().references(() => organizations.id),
-  channel: text('channel').notNull(), // 'facebook' | 'instagram' | 'tiktok'
+  channel: text('channel').notNull(), // 'facebook' | 'instagram' | 'tiktok' | 'line'
   name: text('name').notNull(),
   account_id: text('account_id').notNull().default(''),
   status: text('status').notNull().default('demo'), // 'connected' | 'disconnected' | 'demo'

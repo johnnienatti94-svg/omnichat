@@ -89,6 +89,7 @@ export async function seed(owner: string) {
     { id: 'conn-fb', channel: 'facebook', name: 'MeePro Official Facebook Page', acc: 'meepro.official' },
     { id: 'conn-ig', channel: 'instagram', name: 'MeePro Store IG', acc: 'meepro_store' },
     { id: 'conn-tiktok', channel: 'tiktok', name: 'MeePro TikTok Shop TH', acc: 'meepro_tiktok_shop' },
+    { id: 'conn-line', channel: 'line', name: 'MeePro LINE Official Account', acc: '@meepro.official' },
   ];
   for (const ch of channels) {
     q.push(

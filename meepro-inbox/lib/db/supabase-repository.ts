@@ -110,6 +110,17 @@ export async function seedWorkspace(owner: string) {
         webhook_secret: '',
         created_at: now,
       },
+      {
+        id: 'conn-line',
+        org_id: DEFAULT_ORG_ID,
+        channel: 'line',
+        name: 'MeePro LINE Official Account',
+        account_id: '@meepro.official',
+        status: 'active',
+        credentials_encrypted: '',
+        webhook_secret: '',
+        created_at: now,
+      },
     ],
     { onConflict: 'id' }
   );

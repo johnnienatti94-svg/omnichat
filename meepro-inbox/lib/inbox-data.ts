@@ -1,4 +1,4 @@
-export type Channel = 'facebook' | 'instagram' | 'tiktok';
+export type Channel = 'facebook' | 'instagram' | 'tiktok' | 'line';
 
 export type UserRole = 'admin' | 'supervisor' | 'agent';
 
@@ -110,15 +110,18 @@ export const channelNames: Record<Channel, string> = {
   facebook: 'Facebook',
   instagram: 'Instagram',
   tiktok: 'TikTok Shop',
+  line: 'LINE Official Account',
 };
 
 const people = [
   ['Ploy S.', 'facebook', 'ploy.s', 'Product enquiry', 'สวัสดีค่ะ สนใจ iPhone 15 ค่ะ', 'สอบถาม iPhone 15 ค่ะ มีสีชมพูไหมคะ'],
   ['Thanawat K.', 'instagram', 'thanawat.k', 'Installments', 'สนใจผ่อนมือถือครับ', 'ต้องใช้เอกสารอะไรบ้างครับ'],
   ['Nicha P.', 'tiktok', 'nicha.p', 'Accessories', 'มีเคส iPhone 16 ไหมคะ', 'ขอดูสีที่มีหน่อยค่ะ'],
+  ['Somsak B.', 'line', '@somsak.b', 'Installments', 'สวัสดีครับ สนใจ iPad Air 6 ผ่อน 0% ไหมครับ', 'ขอรายละเอียดโปรโมชั่นผ่อนผ่าน LINE หน่อยครับ'],
   ['Krit T.', 'facebook', 'krit.t', 'Product enquiry', 'สนใจ iPhone มือสองครับ', 'ขอรายละเอียดสินค้าครับ'],
   ['May R.', 'instagram', 'may.r', 'Store visit', 'สวัสดีค่ะ ขอสอบถามหน่อยค่ะ', 'ร้านเปิดกี่โมงคะ'],
   ['Arthit W.', 'tiktok', 'arthit.w', 'After-sales', 'สอบถามเรื่องการรับประกันครับ', 'ขอบคุณครับ'],
+  ['Wipada N.', 'line', '@wipada.n', 'Sales order', 'โอนเงินมัดจำสินค้าแล้วค่ะ แจ้งสลิปใน LINE', 'ขอบคุณแอดมินมากค่ะ จัดส่งวันไหนคะ'],
 ];
 
 export function demoConversations(): Conversation[] {

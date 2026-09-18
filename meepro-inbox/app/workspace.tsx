@@ -4,7 +4,7 @@ import {
   Inbox,Users,MessageSquare,Plug,Search,Check,ArrowUpRight,Camera,Music2,Send,
   ChevronDown,Store,BarChart3,ArrowLeft,UserRound,Plus,StickyNote,PanelRight,
   RefreshCw,CheckCheck,Clock3,ShieldCheck,FileText,ExternalLink,Shield,UserCheck,
-  Sparkles,CheckCircle2,TrendingUp,DollarSign,AlertCircle,Zap,Bot
+  Sparkles,CheckCircle2,TrendingUp,DollarSign,AlertCircle,Zap,Bot,MessageCircle
 } from 'lucide-react';
 import {SidebarProvider,Sidebar,SidebarHeader,SidebarContent,SidebarMenu,SidebarMenuItem,SidebarMenuButton,SidebarFooter,SidebarTrigger} from '@/components/ui/sidebar';
 import {Tabs,TabsList,TabsTrigger} from '@/components/ui/tabs';
@@ -28,7 +28,7 @@ type Setup={channel:Channel;account:string;url:string};
 const channels=Object.keys(channelNames) as Channel[];
 
 function ChannelIcon({channel,small=false}:{channel:Channel;small?:boolean}){
-  const Icon=channel==='facebook'?MessageSquare:channel==='instagram'?Camera:Music2;
+  const Icon=channel==='facebook'?MessageSquare:channel==='instagram'?Camera:channel==='tiktok'?Music2:MessageCircle;
   return <span className={`channel-icon ${channel} ${small?'small':''}`}><Icon size={small?12:19}/></span>;
 }
 
@@ -213,7 +213,7 @@ export default function Workspace(){
      description:'Filter the visible demo inbox by channel and open or closed status. Does not send messages.',
      inputSchema:{
        type:'object',
-       properties:{channel:{enum:['all','facebook','instagram','tiktok']},status:{enum:['open','closed']}},
+       properties:{channel:{enum:['all','facebook','instagram','tiktok','line']},status:{enum:['open','closed']}},
        required:['channel','status'],
        additionalProperties:false
      },
@@ -871,7 +871,7 @@ export default function Workspace(){
                <h2>Make room for every conversation.</h2>
                <p>Prepare your business accounts here. Live connections require platform authorization and integration setup.</p>
              </div>
-             <span className="soft-label">0 of 3 connected</span>
+             <span className="soft-label">{setup.length} of {channels.length} connected</span>
            </div>
            <div className="connection-grid">
              {channels.map(ch=>(
@@ -886,11 +886,13 @@ export default function Workspace(){
                      ?'Bring your Facebook Page customer conversations into one inbox.'
                      :ch==='instagram'
                      ?'A dedicated place for conversations with your Instagram customers.'
-                     :'Manage customer conversations from your TikTok Shop.'}
+                     :ch==='tiktok'
+                     ?'Manage customer conversations from your TikTok Shop.'
+                     :'Connect your LINE Official Account to chat with Thai customers seamlessly.'}
                  </p>
                  <div className="requirements">
                    <b>Before you connect</b>
-                   <p><Check size={14}/>{ch==='facebook'?'Facebook Page admin access':ch==='instagram'?'Instagram professional account':'TikTok Shop seller account'}</p>
+                   <p><Check size={14}/>{ch==='facebook'?'Facebook Page admin access':ch==='instagram'?'Instagram professional account':ch==='tiktok'?'TikTok Shop seller account':'LINE Developers Console Channel ID & Secret'}</p>
                    <p><Clock3 size={14}/>Platform app and messaging access</p>
                  </div>
                  {setup.find(s=>s.channel===ch)&&(
@@ -1074,7 +1076,7 @@ export default function Workspace(){
            }
          }}>
            <label>Business account name<input placeholder="MeePro Phone" value={account} onChange={e=>setAccount(e.target.value)} required maxLength={100}/></label>
-           <label>Public profile or shop URL<input placeholder={connect==='facebook'?'https://www.facebook.com/yourpage':connect==='instagram'?'https://www.instagram.com/youraccount':'https://www.tiktok.com/@yourshop'} value={url} onChange={e=>setUrl(e.target.value)} type="url" required/></label>
+           <label>Public profile or shop URL<input placeholder={connect==='facebook'?'https://www.facebook.com/yourpage':connect==='instagram'?'https://www.instagram.com/youraccount':connect==='tiktok'?'https://www.tiktok.com/@yourshop':'https://line.me/ti/p/@yourlineoa'} value={url} onChange={e=>setUrl(e.target.value)} type="url" required/></label>
            <div className="setup-next">
              <b>Next: authorize the integration</b>
              <p>The live messaging integration is not installed yet. Your developer needs the platform app configuration and approved messaging access. Do not enter passwords or access tokens here.</p>

@@ -43,11 +43,11 @@ CREATE TABLE IF NOT EXISTS team_members (
   PRIMARY KEY (team_id, user_id)
 );
 
--- 5. Channel Connections (Facebook, Instagram, TikTok Shop)
+-- 5. Channel Connections (Facebook, Instagram, TikTok Shop, LINE Official Account)
 CREATE TABLE IF NOT EXISTS channel_connections (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  channel TEXT NOT NULL, -- 'facebook', 'instagram', 'tiktok'
+  channel TEXT NOT NULL, -- 'facebook', 'instagram', 'tiktok', 'line'
   name TEXT NOT NULL,
   account_id TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active', -- 'active', 'demo', 'disconnected'

@@ -778,6 +778,7 @@ export default function AutomationSettings({ onRefresh }: AutomationSettingsProp
                       <option value="facebook">Facebook Messenger (MeePro Official)</option>
                       <option value="instagram">Instagram Direct (MeePro Store)</option>
                       <option value="tiktok">TikTok Shop Customer Chat</option>
+                      <option value="line">LINE Official Account (@meepro.official)</option>
                     </select>
                   </div>
 
